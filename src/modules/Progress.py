@@ -255,7 +255,7 @@ class RichReporter(Reporter):
         self._active = False
         self._files: list[_FileState] = []
         self._spinner = Spinner("dots", text=" muxing")
-        self._live = Live(console=console, get_renderable=self._render, refresh_per_second=10)
+        self._live = Live(console=console, get_renderable=self._render, refresh_per_second=5)
 
     def __enter__(self) -> "RichReporter":
         self._active = True
