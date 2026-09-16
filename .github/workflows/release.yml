@@ -1,0 +1,136 @@
+name: Build binaries on Release
+run-name: "Build TrackForge binaries for ${{ github.event.release.name }}"
+
+on:
+  release:
+    types: [ published ]
+
+permissions:
+  contents: write
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: linux
+            arch: x64
+            runner: ubuntu-24.04
+            ffmpeg_asset: ffmpeg-master-latest-linux64-gpl.tar.xz
+          - os: linux
+            arch: arm64
+            runner: ubuntu-24.04-arm
+            ffmpeg_asset: ffmpeg-master-latest-linuxarm64-gpl.tar.xz
+          - os: windows
+            arch: x64
+            runner: windows-latest
+            ffmpeg_asset: ffmpeg-master-latest-win64-gpl.zip
+    runs-on: ${{ matrix.runner }}
+    name: ${{ matrix.os }}-${{ matrix.arch }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+
+      - name: Install Python 3.13
+        run: uv python install 3.13
+
+      - name: Sync runtime dependencies
+        run: uv sync --no-dev
+
+      - name: Set version from release tag
+        if: github.event.release.tag_name != ''
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          VER="${TAG#v}"
+          sed -i -E "s|^version = .*|version = \"${VER}\"|" pyproject.toml
+          echo "pyproject version set to ${VER}"
+
+      - name: Build binary with PyInstaller
+        run: uv run --with pyinstaller python build.py
+
+      - name: Download and stage ffmpeg + ffprobe
+        env:
+          FF_URL: https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/${{ matrix.ffmpeg_asset }}
+        run: |
+          set -euo pipefail
+          mkdir -p ffdl
+          curl -fL --retry 5 --retry-all-errors --connect-timeout 10 \
+            -o "ffdl/${{ matrix.ffmpeg_asset }}" "$FF_URL"
+          if [ "${{ runner.os }}" = "Windows" ]
+          then
+            7z x "ffdl/${{ matrix.ffmpeg_asset }}" -o"ffdl" -y
+          else
+            tar -xf "ffdl/${{ matrix.ffmpeg_asset }}" -C ffdl
+          fi
+          FFBIN="$(find ffdl -type d -name bin | head -n1)"
+          echo "found ffmpeg bin dir: ${FFBIN}"
+          echo "FFBIN=${FFBIN}" >> "$GITHUB_ENV"
+
+      - name: Download and stage mkvmerge (Windows)
+        if: runner.os == 'Windows'
+        env:
+          MKV_URL: https://mkvtoolnix.download/windows/releases/102.0/mkvtoolnix-64-bit-102.0.7z
+        run: |
+          set -euo pipefail
+          mkdir -p mkvdl
+          curl -fL --retry 5 --retry-all-errors --connect-timeout 10 \
+            -o mkvdl/mkvtoolnix.7z "$MKV_URL"
+          7z x mkvdl/mkvtoolnix.7z -o"mkvdl" -y
+
+          MKVMERGE="$(find mkvdl -type f -name mkvmerge.exe | head -n1)"
+          if [ -z "$MKVMERGE" ]
+          then
+            echo "::error::mkvmerge.exe not found in the mkvtoolnix archive"
+            exit 1
+          fi
+          echo "found mkvmerge: ${MKVMERGE}"
+          echo "MKVMERGE=${MKVMERGE}" >> "$GITHUB_ENV"
+
+      - name: Assemble release package
+        run: |
+          set -euo pipefail
+          PKG="trackforge-${{ matrix.os }}-${{ matrix.arch }}"
+          mkdir -p "${PKG}/static/ffmpeg" "${PKG}/static/ffprobe" "${PKG}/static/mkvmerge"
+
+          if [ "${{ runner.os }}" = "Windows" ]
+          then
+            cp "dist/trackforge.exe" "${PKG}/"
+            cp "${FFBIN}/ffmpeg.exe" "${PKG}/static/ffmpeg/"
+            cp "${FFBIN}/ffprobe.exe" "${PKG}/static/ffprobe/"
+            cp "${MKVMERGE}" "${PKG}/static/mkvmerge/"
+          else
+            cp "dist/trackforge" "${PKG}/"
+            cp "${FFBIN}/ffmpeg" "${PKG}/static/ffmpeg/"
+            cp "${FFBIN}/ffprobe" "${PKG}/static/ffprobe/"
+            chmod +x "${PKG}/trackforge" "${PKG}/static/ffmpeg/ffmpeg" "${PKG}/static/ffprobe/ffprobe"
+          fi
+
+          cp LICENSE NOTICE README.md "${PKG}/"
+
+          echo "PKG=${PKG}" >> "$GITHUB_ENV"
+
+      - name: Zip package (Linux)
+        if: runner.os == 'Linux'
+        run: zip -r "${PKG}.zip" "${PKG}"
+
+      - name: Zip package (Windows)
+        if: runner.os == 'Windows'
+        run: 7z a -tzip "${PKG}.zip" "${PKG}"
+
+      - name: Upload zip to release
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
+        with:
+          tag_name: ${{ github.event.release.tag_name }}
+          files: trackforge-${{ matrix.os }}-${{ matrix.arch }}.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

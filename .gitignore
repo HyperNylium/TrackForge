@@ -1,0 +1,26 @@
+# Python bytecode
+__pycache__/
+*.py[cod]
+
+# Virtual environments
+.venv/
+.env
+
+# Ruff cache
+.ruff_cache/
+
+# PyInstaller build artifacts
+/build/
+/dist/
+/*.spec
+
+# OS junk
+.DS_Store
+
+# Bundled external binaries (populated only in release zips)
+static/ffmpeg/*
+static/ffprobe/*
+static/mkvmerge/*
+!static/ffmpeg/.gitkeep
+!static/ffprobe/.gitkeep
+!static/mkvmerge/.gitkeep

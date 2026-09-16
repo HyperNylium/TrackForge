@@ -1,0 +1,23 @@
+TrackForge
+Copyright (C) 2026 the TrackForge authors
+
+This program is free software: you can redistribute it and/or modify it under
+the terms of the GNU General Public License as published by the Free Software
+Foundation, either version 3 of the License, or (at your option) any later
+version. See the LICENSE file for the full text.
+
+------------------------------------------------------------------------------
+Third-party attribution
+------------------------------------------------------------------------------
+
+The Even-Out-Sound (EOS) and EOS+ audio DSP in src/modules/EOS.py (the compand
+dynamic-range curve and the pan/downmix coefficient filters) is copied from
+mkv-auto by philiptn:
+
+    https://github.com/philiptn/mkv-auto
+
+It is used here with the author's permission, granted on 2026-09-12 in
+mkv-auto issue #44, on the condition that this project is licensed under GPLv3
+and credits the original author. Thank you philiptn!
+
+All other code in this repository is original work by the TrackForge authors.

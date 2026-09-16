@@ -1,0 +1,35 @@
+name: Bug
+description: File a bug report
+title: "[BUG]: "
+assignees:
+  - HyperNylium
+labels:
+  - bug
+body:
+  - type: input
+    id: version
+    attributes:
+      label: TrackForge version
+      description: Which version of TrackForge are you using? (run with --version)
+      placeholder: "1.0.0"
+    validations:
+      required: true
+
+  - type: textarea
+    id: details
+    attributes:
+      label: Details about your issue
+      description: Provide any extra details that will help reproduce or understand the bug.
+      placeholder: "Steps to reproduce, expected behavior, actual behavior, screenshots..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Command and output
+      description: >
+        Paste the command you ran and the relevant terminal output. Run with -v for more detail.
+      render: shell
+    validations:
+      required: true
