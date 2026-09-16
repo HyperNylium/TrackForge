@@ -98,8 +98,6 @@ TrackForge compiles to a single-file binary with [PyInstaller](https://pyinstall
 uv run --with pyinstaller python build.py
 ```
 
-This writes `dist/trackforge` (`dist/trackforge.exe` on Windows).
-
 PyInstaller cannot cross-compile, so it builds for the platform it runs on. To get a binary for a given target, run the build on that platform:
 
 - **Windows x64** - build on Windows x64.

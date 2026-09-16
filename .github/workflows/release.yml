@@ -21,15 +21,12 @@ jobs:
           - os: linux
             arch: x64
             runner: ubuntu-24.04
-            ffmpeg_asset: ffmpeg-master-latest-linux64-gpl.tar.xz
           - os: linux
             arch: arm64
             runner: ubuntu-24.04-arm
-            ffmpeg_asset: ffmpeg-master-latest-linuxarm64-gpl.tar.xz
           - os: windows
             arch: x64
             runner: windows-latest
-            ffmpeg_asset: ffmpeg-master-latest-win64-gpl.zip
     runs-on: ${{ matrix.runner }}
     name: ${{ matrix.os }}-${{ matrix.arch }}
     steps:
@@ -55,77 +52,23 @@ jobs:
           sed -i -E "s|^version = .*|version = \"${VER}\"|" pyproject.toml
           echo "pyproject version set to ${VER}"
 
-      - name: Build binary with PyInstaller
+      - name: Build and stage release package
         run: uv run --with pyinstaller python build.py
 
-      - name: Download and stage ffmpeg + ffprobe
-        env:
-          FF_URL: https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/${{ matrix.ffmpeg_asset }}
+      - name: Read package version
+        id: pkg
         run: |
           set -euo pipefail
-          mkdir -p ffdl
-          curl -fL --retry 5 --retry-all-errors --connect-timeout 10 \
-            -o "ffdl/${{ matrix.ffmpeg_asset }}" "$FF_URL"
-          if [ "${{ runner.os }}" = "Windows" ]
-          then
-            7z x "ffdl/${{ matrix.ffmpeg_asset }}" -o"ffdl" -y
-          else
-            tar -xf "ffdl/${{ matrix.ffmpeg_asset }}" -C ffdl
-          fi
-          FFBIN="$(find ffdl -type d -name bin | head -n1)"
-          echo "found ffmpeg bin dir: ${FFBIN}"
-          echo "FFBIN=${FFBIN}" >> "$GITHUB_ENV"
-
-      - name: Download and stage mkvmerge (Windows)
-        if: runner.os == 'Windows'
-        env:
-          MKV_URL: https://mkvtoolnix.download/windows/releases/102.0/mkvtoolnix-64-bit-102.0.7z
-        run: |
-          set -euo pipefail
-          mkdir -p mkvdl
-          curl -fL --retry 5 --retry-all-errors --connect-timeout 10 \
-            -o mkvdl/mkvtoolnix.7z "$MKV_URL"
-          7z x mkvdl/mkvtoolnix.7z -o"mkvdl" -y
-
-          MKVMERGE="$(find mkvdl -type f -name mkvmerge.exe | head -n1)"
-          if [ -z "$MKVMERGE" ]
-          then
-            echo "::error::mkvmerge.exe not found in the mkvtoolnix archive"
-            exit 1
-          fi
-          echo "found mkvmerge: ${MKVMERGE}"
-          echo "MKVMERGE=${MKVMERGE}" >> "$GITHUB_ENV"
-
-      - name: Assemble release package
-        run: |
-          set -euo pipefail
-          PKG="trackforge-${{ matrix.os }}-${{ matrix.arch }}"
-          mkdir -p "${PKG}/static/ffmpeg" "${PKG}/static/ffprobe" "${PKG}/static/mkvmerge"
-
-          if [ "${{ runner.os }}" = "Windows" ]
-          then
-            cp "dist/trackforge.exe" "${PKG}/"
-            cp "${FFBIN}/ffmpeg.exe" "${PKG}/static/ffmpeg/"
-            cp "${FFBIN}/ffprobe.exe" "${PKG}/static/ffprobe/"
-            cp "${MKVMERGE}" "${PKG}/static/mkvmerge/"
-          else
-            cp "dist/trackforge" "${PKG}/"
-            cp "${FFBIN}/ffmpeg" "${PKG}/static/ffmpeg/"
-            cp "${FFBIN}/ffprobe" "${PKG}/static/ffprobe/"
-            chmod +x "${PKG}/trackforge" "${PKG}/static/ffmpeg/ffmpeg" "${PKG}/static/ffprobe/ffprobe"
-          fi
-
-          cp LICENSE NOTICE README.md "${PKG}/"
-
-          echo "PKG=${PKG}" >> "$GITHUB_ENV"
+          VER="$(uv run python -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])")"
+          echo "version=${VER}" >> "$GITHUB_OUTPUT"
 
       - name: Zip package (Linux)
         if: runner.os == 'Linux'
-        run: zip -r "${PKG}.zip" "${PKG}"
+        run: zip -r "trackforge-${{ matrix.os }}-${{ matrix.arch }}.zip" "release-v${{ steps.pkg.outputs.version }}"
 
       - name: Zip package (Windows)
         if: runner.os == 'Windows'
-        run: 7z a -tzip "${PKG}.zip" "${PKG}"
+        run: 7z a -tzip "trackforge-${{ matrix.os }}-${{ matrix.arch }}.zip" "release-v${{ steps.pkg.outputs.version }}"
 
       - name: Upload zip to release
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
