@@ -95,7 +95,9 @@ The other flags (forced, commentary, hearing impaired, visual impaired, original
 TrackForge compiles to a single-file binary with [PyInstaller](https://pyinstaller.org/). From a clone of the repo:
 
 ```
-uv run --with pyinstaller python build.py
+uv run --with pyinstaller python build.py            # Build the TrackForge binary
+uv run --with pyinstaller python build.py --refresh  # Download dependencies to static folder
+uv run --with pyinstaller python build.py --cleanup  # Delete build artifacts and release folder
 ```
 
 PyInstaller cannot cross-compile, so it builds for the platform it runs on. To get a binary for a given target, run the build on that platform:
