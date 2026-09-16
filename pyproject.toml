@@ -1,6 +1,6 @@
 [project]
 name = "trackforge"
-version = "1.0.1"
+version = "1.0.0"
 description = "CLI tool for re-encoding and downmixing the audio tracks of media files."
 requires-python = ">=3.13,<3.14"
 dependencies = [
