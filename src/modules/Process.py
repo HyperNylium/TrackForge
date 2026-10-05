@@ -373,8 +373,10 @@ def run_one(job: Job, reporter: Reporter, ffprobe_path: str, ffmpeg: str, mkvmer
             if os.path.exists(temp_output):
                 os.remove(temp_output)
     except Exception as error:
+        file_reporter.finish(ok=False)
         return (False, job.output, str(error))
 
+    file_reporter.finish(ok=True)
     return (True, job.output, "")
 
 
@@ -382,7 +384,7 @@ def run_batch(jobs: list[Job], simple: bool, file_workers: int) -> int:
     """Process every job, up to file_workers at once, and report the outcome."""
 
     console = Console(log_path=False)
-    reporter = make_reporter(simple, console, batch=len(jobs) > 1)
+    reporter = make_reporter(simple, console, batch=len(jobs) > 1, total=len(jobs))
 
     ffprobe_path = get_binary("ffprobe", required=True)
     ffmpeg = get_binary("ffmpeg", required=True)

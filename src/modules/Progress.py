@@ -3,12 +3,10 @@ import time
 import threading
 from dataclasses import field, dataclass
 
-from rich.console import Console
+from rich.console import Console, Group
 from rich.live import Live
-from rich.spinner import Spinner
 from rich.table import Table
 from rich.text import Text
-from rich.tree import Tree
 from rich.progress_bar import ProgressBar
 
 from ..types.track import PlanItem
@@ -18,6 +16,12 @@ from .Vars import log, layout_token
 
 # how wide each per-encode bar is drawn, in characters.
 BAR_WIDTH = 15
+
+# how many characters wide the file name column is before it truncates.
+NAME_WIDTH = 38
+
+# the per-track progress ramp, filling as a track encodes.
+_RUNNING_RAMP = "○◔◑◕"
 
 
 @dataclass
@@ -50,7 +54,7 @@ class _FileState:
     # one _ItemState per planned output track for this file.
     states: list[_ItemState] = field(default_factory=list)
 
-    # source track groupings: each is a tree line plus the item indices under it.
+    # source track groupings: each is a source description plus the indices of its output tracks.
     groups: list[tuple[str, list[int]]] = field(default_factory=list)
 
     # one of pending, running, done for this file's mux step.
@@ -66,73 +70,81 @@ def _item_label(item: PlanItem) -> str:
     return f"{base} {layout_token(out_channels)}"
 
 
-def _elapsed_note(state: _ItemState) -> str:
-    """Elapsed time and speed for a running bar that has no known duration."""
-
-    if state.started_at is None:
-        return ""
-
-    elapsed = int(time.monotonic() - state.started_at)
-    if state.speed is not None and state.speed > 0:
-        return f"{elapsed}s {state.speed:.1f}x"
-
-    return f"{elapsed}s"
-
-
-def _item_bar(state: _ItemState) -> ProgressBar:
-    """Pick the progress bar for one output row based on its state."""
+def _track_fraction(state: _ItemState) -> float:
+    """How far one output track has encoded, from 0.0 to 1.0."""
 
     match state.status:
         case "done":
-            return ProgressBar(total=100, completed=100, width=BAR_WIDTH)
-        case "pending" | "failed":
-            return ProgressBar(total=100, completed=0, width=BAR_WIDTH)
-        case _:
-            # a running bar with no known duration pulses instead of filling.
+            return 1.0
+        case "running":
             if state.total is None or state.total <= 0:
-                return ProgressBar(total=None, width=BAR_WIDTH)
+                return 0.0
+            return min(1.0, max(0.0, state.completed / state.total))
+        case _:
+            # pending and failed have made no progress.
+            return 0.0
 
-            completed = min(state.total, max(0.0, state.completed))
-            return ProgressBar(total=state.total, completed=completed, width=BAR_WIDTH)
 
-
-def _item_cells(state: _ItemState) -> tuple[str, object]:
-    """Build the percent and note cells for one output row."""
+def _track_glyph(state: _ItemState) -> Text:
+    """One filling dot for one output track, coloured by how it is doing."""
 
     match state.status:
-        case "pending":
-            return "", ""
+        case "done":
+            return Text("●", style="green")
         case "failed":
-            return "", Text("failed", style="red")
-        case "done":
-            if state.total is None or state.total <= 0:
-                return "", "done"
-            return "100%", "done"
+            return Text("✗", style="red")
+        case "pending":
+            return Text("○", style="dim")
         case _:
-            # a running bar shows a percent and eta, or elapsed time when the duration is unknown.
-            if state.total is None or state.total <= 0:
-                return "", _elapsed_note(state)
-
-            percent = int(min(1.0, state.completed / state.total) * 100)
-            if state.speed is not None and state.speed > 0:
-                remaining = max(0.0, state.total - state.completed)
-                eta = int(remaining / state.speed)
-                return f"{percent}%", f"~{eta}s"
-
-            return f"{percent}%", "~?s"
+            # a running track fills through the ramp but never reaches the full circle,
+            # which is reserved for done so the two never look the same.
+            step = min(len(_RUNNING_RAMP) - 1, int(_track_fraction(state) * len(_RUNNING_RAMP)))
+            return Text(_RUNNING_RAMP[step], style="yellow")
 
 
-def _render_item(state: _ItemState) -> Table:
-    """Build one output row: label, bar, percent, and note."""
+def _file_dots(state: _FileState) -> Text:
+    """The row of per-track dots."""
 
-    grid = Table.grid(padding=(0, 1))
-    grid.add_column(width=10, no_wrap=True)
-    grid.add_column(width=BAR_WIDTH, no_wrap=True)
-    grid.add_column(width=4, justify="right", no_wrap=True)
-    grid.add_column(no_wrap=True)
-    percent, note = _item_cells(state)
-    grid.add_row(state.label, _item_bar(state), percent, note)
-    return grid
+    dots = Text()
+    for position, (_description, indices) in enumerate(state.groups):
+        if position > 0:
+            dots.append(" │ ", style="dim")
+
+        for place, index in enumerate(indices):
+            if place > 0:
+                dots.append(" ")
+            dots.append_text(_track_glyph(state.states[index]))
+
+    return dots
+
+
+def _file_fraction(state: _FileState) -> float:
+    """Overall encode progress for a file."""
+
+    if not state.states:
+        return 0.0
+
+    total = 0.0
+    for item in state.states:
+        total += _track_fraction(item)
+
+    return total / len(state.states)
+
+
+def _file_row(state: _FileState) -> tuple[ProgressBar, object, Text]:
+    """The bar, the middle percent/phase cell, and the dots for one file's row."""
+
+    # before ffprobe has filled the plan there is nothing to measure yet.
+    if not state.states:
+        return ProgressBar(total=100, completed=0, width=BAR_WIDTH), Text("·", style="dim"), Text()
+
+    # muxing happens after every track is encoded so the bar is full and the dots are all done.
+    if state.mux_status == "running":
+        return ProgressBar(total=100, completed=100, width=BAR_WIDTH), "muxing...", _file_dots(state)
+
+    fraction = _file_fraction(state)
+    bar = ProgressBar(total=100, completed=fraction * 100, width=BAR_WIDTH)
+    return bar, f"{int(fraction * 100)}%", _file_dots(state)
 
 
 class FileReporter:
@@ -162,6 +174,9 @@ class FileReporter:
     def note(self, message: str) -> None:
         raise NotImplementedError
 
+    def finish(self, ok: bool) -> None:
+        raise NotImplementedError
+
 
 class Reporter:
     """Owns the whole display and hands out one FileReporter per input file."""
@@ -186,7 +201,8 @@ class Reporter:
 class RichFileReporter(FileReporter):
     """One file's progress, held as shared state that the Live thread renders."""
 
-    def __init__(self, console: Console, lock: threading.Lock, state: _FileState) -> None:
+    def __init__(self, reporter: "RichReporter", console: Console, lock: threading.Lock, state: _FileState) -> None:
+        self._reporter = reporter
         self._console = console
         self._lock = lock
         self._state = state
@@ -245,16 +261,22 @@ class RichFileReporter(FileReporter):
     def note(self, message: str) -> None:
         self._console.log(message)
 
+    def finish(self, ok: bool) -> None:
+        # drop the file from the live region so it stays bounded to the files still encoding.
+        self._reporter.retire_file(self._state, ok)
+
 
 class RichReporter(Reporter):
-    """A live tree of every file's per-encode bars, rebuilt from shared state."""
+    """A compact live region: a header plus one row per file still being processed."""
 
-    def __init__(self, console: Console) -> None:
+    def __init__(self, console: Console, total: int) -> None:
         self._console = console
+        self._total = total
+        self._completed = 0
+        self._failed = 0
         self._lock = threading.Lock()
         self._active = False
         self._files: list[_FileState] = []
-        self._spinner = Spinner("dots", text=" muxing")
         self._live = Live(console=console, get_renderable=self._render, refresh_per_second=10)
 
     def __enter__(self) -> "RichReporter":
@@ -277,42 +299,57 @@ class RichReporter(Reporter):
         with self._lock:
             state = _FileState(input=input_path, output=output_path)
             self._files.append(state)
-            return RichFileReporter(self._console, self._lock, state)
+            return RichFileReporter(self, self._console, self._lock, state)
 
-    def _render(self) -> Tree:
-        """Rebuild the whole display from shared state."""
+    def retire_file(self, state: _FileState, ok: bool) -> None:
+        """Remove a finished file from the live region."""
 
         with self._lock:
-            if len(self._files) == 1:
-                return self._file_tree(self._files[0], header=True)
+            if state in self._files:
+                self._files.remove(state)
+            if ok:
+                self._completed += 1
+            else:
+                self._failed += 1
 
-            root = Tree(f"Processing {len(self._files)} files")
+        if not ok:
+            self._console.log(Text(f"failed: {os.path.basename(state.output)}", style="red"))
+
+    def _header(self) -> Text:
+        """Build the header line for the live region."""
+
+        header = Text()
+        header.append("TrackForge", style="bold")
+        header.append("  ·  ", style="dim")
+        header.append(f"{self._completed}/{self._total} done")
+        header.append("  ·  ", style="dim")
+        header.append(f"{len(self._files)} running")
+
+        if self._failed:
+            header.append("  ·  ", style="dim")
+            header.append(f"{self._failed} failed", style="red")
+
+        return header
+
+    def _render(self) -> Group | Text:
+        """Rebuild the live region: the header, then one row per file still processing."""
+
+        with self._lock:
+            header = self._header()
+            if not self._files:
+                return header
+
+            table = Table.grid(padding=(0, 1))
+            table.add_column(width=NAME_WIDTH, no_wrap=True, overflow="ellipsis")
+            table.add_column(width=BAR_WIDTH, no_wrap=True)
+            table.add_column(width=9, justify="right", no_wrap=True)
+            table.add_column(no_wrap=True)
+
             for state in self._files:
-                root.add(self._file_tree(state, header=False))
-            return root
+                bar, middle, dots = _file_row(state)
+                table.add_row(os.path.basename(state.output), bar, middle, dots)
 
-    def _file_tree(self, state: _FileState, header: bool) -> Tree:
-        """Build one file's tree, either headed on its own or as a batch branch."""
-
-        if header:
-            tree = Tree(f"Processing: {state.input}  ->  {state.output}")
-            container = tree.add(os.path.basename(state.output))
-        else:
-            tree = Tree(os.path.basename(state.output))
-            container = tree
-
-        for description, indices in state.groups:
-            source_node = container.add(description)
-            for index in indices:
-                source_node.add(_render_item(state.states[index]))
-
-        match state.mux_status:
-            case "running":
-                tree.add(self._spinner)
-            case "done":
-                tree.add(Text("mux done"))
-
-        return tree
+            return Group(header, Text(""), table)
 
 
 class SimpleFileReporter(FileReporter):
@@ -350,6 +387,9 @@ class SimpleFileReporter(FileReporter):
     def note(self, message: str) -> None:
         log.info(f"{self._tag}{message}")
 
+    def finish(self, ok: bool) -> None:
+        """Simple output has no live region to retire a file from."""
+
 
 class SimpleReporter(Reporter):
     """Plain stdout log lines instead of a live region. Used for --simple and -v."""
@@ -372,9 +412,9 @@ class SimpleReporter(Reporter):
         return SimpleFileReporter(tag)
 
 
-def make_reporter(simple: bool, console: Console, batch: bool) -> Reporter:
+def make_reporter(simple: bool, console: Console, batch: bool, total: int = 1) -> Reporter:
     """Pick the reporter for this run. Non-TTY is handled by RichReporter itself."""
 
     if simple:
         return SimpleReporter(batch)
-    return RichReporter(console)
+    return RichReporter(console, total)
